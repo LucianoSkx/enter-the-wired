@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Lua Plugins + Headcrab Installer
+# Sets up custom Lua plugins and installs SLSsteam (via Headcrab)
+
+ZIP_URL="https://files.catbox.moe/12tdbu.zip"
+SLS_URL="https://raw.githubusercontent.com/Deadboy666/h3adcr-b/main/headcrab.sh?t=$(date +%s)"
+CONFIG_DIR="$HOME/.config/SLSsteam"
+CONFIG_FILE="$CONFIG_DIR/config.yaml"
+PLUGINS_DIR="$CONFIG_DIR/plugins"
+
+# Colors (disabled if not interactive terminal)
+if [ -t 1 ] && [ -t 0 ]; then
+    GREEN='\033[0;32m'
+    RED='\033[0;31m'
+    YELLOW='\033[1;33m'
+    NC='\033[0m'
+else
+    GREEN=''
+    RED=''
+    YELLOW=''
+    NC=''
+fi
+
+echo -e "${GREEN}=============================================="
+echo "  LUA PLUGINS + HEADCRAB INSTALLER"
+echo "==============================================${NC}"
+echo ""
+
+# Helper: check for commands
+for cmd in curl unzip sed; do
+    if ! command -v "$cmd" &>/dev/null; then
+        echo -e "${RED}Error: required command '$cmd' not found. Please install it first.${NC}" >&2
+        exit 1
+    fi
+done
+
+# Cleanup traps on exit / signals
+TMP_DIR="$(mktemp -d)"
+TMP_HEADCRAB="$(mktemp -t headcrab.XXXXXX.sh)"
+
+cleanup() {
+    rm -rf "$TMP_DIR"
+    rm -f "$TMP_HEADCRAB"
+}
+trap cleanup EXIT INT TERM HUP
+
+# Step 1: Download and extract .lua plugins
+echo -e "${GREEN}[1/3] Downloading and installing Lua plugins...${NC}"
+echo "----------------------------------------------"
+
+if ! mkdir -p "$PLUGINS_DIR"; then
+    echo -e "${RED}Error: failed to create plugins directory at '$PLUGINS_DIR'.${NC}" >&2
+    exit 1
+fi
+
+ZIP_FILE="$TMP_DIR/plugins.zip"
+echo "Fetching plugins package from $ZIP_URL..."
+if ! curl -fsSL --retry 3 --retry-delay 2 "$ZIP_URL" -o "$ZIP_FILE"; then
+    echo -e "${RED}Error: failed to download plugins package.${NC}" >&2
+    exit 1
+fi
+
+# Verify downloaded zip integrity
+if ! unzip -tq "$ZIP_FILE" &>/dev/null; then
+    echo -e "${RED}Error: downloaded zip file is corrupted or invalid.${NC}" >&2
+    exit 1
+fi
+
+echo "Extracting .lua files into $PLUGINS_DIR..."
+# -j: junk paths (extract flat into destination)
+# -o: overwrite existing files without prompting
+# -q: quiet mode
+if ! unzip -j -o -q "$ZIP_FILE" "*.lua" -d "$PLUGINS_DIR"; then
+    echo -e "${RED}Error: failed to extract .lua files into '$PLUGINS_DIR'.${NC}" >&2
+    exit 1
+fi
+
+echo -e "${GREEN}Lua plugins deployed:${NC}"
+for file in "$PLUGINS_DIR"/*.lua; do
+    if [ -f "$file" ]; then
+        echo "  - $(basename "$file")"
+    fi
+done
+echo ""
+
+# Step 2: Run Headcrab (SLSsteam installer)
+echo -e "${GREEN}[2/3] Fetching and running Headcrab (SLSsteam)...${NC}"
+echo "----------------------------------------------"
+
+if ! curl -fsSL --retry 3 --retry-delay 2 "$SLS_URL" -o "$TMP_HEADCRAB"; then
+    echo -e "${RED}Error: failed to download Headcrab installer script.${NC}" >&2
+    exit 1
+fi
+
+chmod +x "$TMP_HEADCRAB"
+bash "$TMP_HEADCRAB" "$@"
+echo ""
+
+# Step 3: Ensure Plugins: yes in config.yaml
+echo -e "${GREEN}[3/3] Configuring SLSsteam settings...${NC}"
+echo "----------------------------------------------"
+
+if [ -f "$CONFIG_FILE" ]; then
+    if grep -qE '^[[:space:]]*Plugins:' "$CONFIG_FILE"; then
+        sed -i -E 's/^[[:space:]]*Plugins:[[:space:]]*.*/Plugins: yes/' "$CONFIG_FILE"
+    else
+        printf "\n# Enable Lua plugins from ~/.config/SLSsteam/plugins\nPlugins: yes\n" >> "$CONFIG_FILE"
+    fi
+    echo -e "  ${GREEN}✓${NC} 'Plugins: yes' set in $CONFIG_FILE"
+else
+    mkdir -p "$CONFIG_DIR"
+    printf "# Enable Lua plugins from ~/.config/SLSsteam/plugins\nPlugins: yes\n" > "$CONFIG_FILE"
+    echo -e "  ${GREEN}✓${NC} Created $CONFIG_FILE with 'Plugins: yes'"
+fi
+
+echo ""
+echo -e "${GREEN}=============================================="
+echo "  INSTALLATION COMPLETED SUCCESSFULLY!"
+echo "==============================================${NC}"
+echo ""
+echo "  Plugins directory: $PLUGINS_DIR"
+echo "  Config file:       $CONFIG_FILE (Plugins: yes)"
+echo "  Restart Steam to load new plugins and configurations."
+echo ""

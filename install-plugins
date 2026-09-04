@@ -4,7 +4,7 @@ set -euo pipefail
 # Lua Plugins + Headcrab Installer
 # Sets up custom Lua plugins and installs SLSsteam (via Headcrab)
 
-ZIP_URL="https://files.catbox.moe/12tdbu.zip"
+ZIP_URL="https://github.com/ciscosweater/enter-the-wired/releases/download/latest/plugins-deps.zip"
 SLS_URL="https://raw.githubusercontent.com/Deadboy666/h3adcr-b/main/headcrab.sh?t=$(date +%s)"
 CONFIG_DIR="$HOME/.config/SLSsteam"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"

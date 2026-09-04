@@ -7,7 +7,17 @@ set -euo pipefail
 ZIP_URL="https://github.com/ciscosweater/enter-the-wired/releases/download/latest/plugins-deps.zip"
 APP_URL="https://github.com/ciscosweater/enter-the-wired/releases/download/latest/plugins-app.zip"
 SLS_URL="https://raw.githubusercontent.com/Deadboy666/h3adcr-b/main/headcrab.sh?t=$(date +%s)"
-CONFIG_DIR="$HOME/.config/SLSsteam"
+NATIVE_CONFIG_DIR="$HOME/.config/SLSsteam"
+FLATPAK_STEAM_DIR="$HOME/.var/app/com.valvesoftware.Steam/.steam/steam"
+FLATPAK_CONFIG_DIR="$HOME/.var/app/com.valvesoftware.Steam/.config/SLSsteam"
+# Headcrab copies SLSsteam into the Flatpak prefix when that Steam dir exists,
+# but only uses the Flatpak config dir if it already exists. Create it first so
+# config.yaml and plugins land where Flatpak SLSsteam actually reads them.
+if [ -d "$FLATPAK_STEAM_DIR" ]; then
+    CONFIG_DIR="$FLATPAK_CONFIG_DIR"
+else
+    CONFIG_DIR="$NATIVE_CONFIG_DIR"
+fi
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 PLUGINS_DIR="$CONFIG_DIR/plugins"
 APP_DEST="$HOME/.local/share/psyche"
@@ -68,6 +78,119 @@ need_free_kb() {
     fi
 }
 
+# Native always (Headcrab also drops netsock here). Flatpak when Steam Flatpak is present.
+sls_config_dirs() {
+    printf '%s\n' "$NATIVE_CONFIG_DIR"
+    if [ -d "$FLATPAK_STEAM_DIR" ] || [ -d "$FLATPAK_CONFIG_DIR" ]; then
+        printf '%s\n' "$FLATPAK_CONFIG_DIR"
+    fi
+}
+
+enable_plugins_in_config() {
+    local cfg="$1"
+
+    mkdir -p "$(dirname "$cfg")"
+    if [ ! -s "$cfg" ]; then
+        printf 'Plugins: yes\n' > "$cfg"
+        return
+    fi
+    if grep -qE '^[[:space:]]*Plugins:' "$cfg"; then
+        sed -i -E 's/^[[:space:]]*Plugins:[[:space:]]*.*/Plugins: yes/' "$cfg"
+    else
+        printf '\n# Enable Lua plugins from the SLSsteam plugins directory\nPlugins: yes\n' >> "$cfg"
+    fi
+}
+
+# Headcrab rebuilds config.yaml from the official SLSsteam template and drops
+# keys it does not know (AdditionalDepots, DecryptionKeys from download.lua)
+# and can empty user lists. Keep the user's blocks; only append official keys
+# the backup did not already have.
+merge_user_config() {
+    local backup="$1"
+    local current="$2"
+    local dest="$3"
+    local tmp
+
+    if [ ! -s "$backup" ]; then
+        return 0
+    fi
+    if [ ! -s "$current" ]; then
+        cp -a "$backup" "$dest"
+        return 0
+    fi
+
+    tmp="$(mktemp "${dest}.tmp.XXXXXX")"
+    if ! awk '
+        function top_key(line,    k) {
+            if (line ~ /^[A-Za-z_][A-Za-z0-9_]*:/) {
+                k = line
+                sub(/:.*/, "", k)
+                return k
+            }
+            return ""
+        }
+
+        NR == FNR {
+            k = top_key($0)
+            if (k != "") {
+                current = k
+                if (!(k in user_has)) {
+                    user_has[k] = 1
+                    user_order[++nuser] = k
+                    user_block[k] = $0 ORS
+                }
+                next
+            }
+            if (current != "") {
+                user_block[current] = user_block[current] $0 ORS
+            } else {
+                user_prefix = user_prefix $0 ORS
+            }
+            next
+        }
+
+        {
+            k = top_key($0)
+            if (k != "") {
+                current = k
+                capturing = !(k in user_has)
+                if (capturing && !(k in extra_seen)) {
+                    extra_seen[k] = 1
+                    extra_order[++nextra] = k
+                    extra_block[k] = $0 ORS
+                } else if (capturing) {
+                    extra_block[k] = extra_block[k] $0 ORS
+                }
+                next
+            }
+            if (capturing && current != "") {
+                extra_block[current] = extra_block[current] $0 ORS
+            }
+        }
+
+        END {
+            printf "%s", user_prefix
+            for (i = 1; i <= nuser; i++) {
+                printf "%s", user_block[user_order[i]]
+            }
+            for (i = 1; i <= nextra; i++) {
+                printf "%s", extra_block[extra_order[i]]
+            }
+        }
+    ' "$backup" "$current" > "$tmp"; then
+        rm -f "$tmp"
+        cp -a "$backup" "$dest"
+        return 0
+    fi
+    if [ ! -s "$tmp" ]; then
+        rm -f "$tmp"
+        cp -a "$backup" "$dest"
+        return 0
+    fi
+    chmod --reference="$backup" "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$dest"
+}
+
 echo -e "${GREEN}=============================================="
 echo "  LUA PLUGINS + HEADCRAB INSTALLER"
 echo "==============================================${NC}"
@@ -94,9 +217,11 @@ trap cleanup EXIT INT TERM HUP
 echo -e "${GREEN}[1/4] Downloading and installing Lua plugins...${NC}"
 echo "----------------------------------------------"
 
-if ! mkdir -p "$PLUGINS_DIR"; then
-    die "failed to create plugins directory at '$PLUGINS_DIR'."
-fi
+while IFS= read -r dir; do
+    if ! mkdir -p "$dir/plugins"; then
+        die "failed to create plugins directory at '$dir/plugins'."
+    fi
+done < <(sls_config_dirs)
 
 ZIP_FILE="$TMP_DIR/plugins.zip"
 echo "Fetching plugins package from $ZIP_URL..."
@@ -108,17 +233,19 @@ if [ ! -s "$ZIP_FILE" ] || ! unzip -tq "$ZIP_FILE" &>/dev/null; then
     die "downloaded zip file is corrupted or invalid."
 fi
 
-echo "Extracting .lua files into $PLUGINS_DIR..."
 # -j: junk paths (extract flat into destination)
 # -o: overwrite existing files without prompting
 # -q: quiet mode
-if ! unzip -j -o -q "$ZIP_FILE" "*.lua" -d "$PLUGINS_DIR"; then
-    die "failed to extract .lua files into '$PLUGINS_DIR'."
-fi
+lua_found=0
+while IFS= read -r dir; do
+    echo "Extracting .lua files into $dir/plugins..."
+    if ! unzip -j -o -q "$ZIP_FILE" "*.lua" -d "$dir/plugins"; then
+        die "failed to extract .lua files into '$dir/plugins'."
+    fi
+done < <(sls_config_dirs)
 
 echo -e "${GREEN}Lua plugins deployed:${NC}"
 shopt -s nullglob
-lua_found=0
 for file in "$PLUGINS_DIR"/*.lua; do
     lua_found=1
     echo "  - $(basename "$file")"
@@ -133,6 +260,26 @@ echo ""
 echo -e "${GREEN}[2/4] Fetching and running Headcrab (SLSsteam)...${NC}"
 echo "----------------------------------------------"
 
+# Headcrab rewrites config.yaml from the SLSsteam template and drops
+# AdditionalDepots / DecryptionKeys. Backup first; merge them back after.
+CONFIG_BACKUPS="$TMP_DIR/config-backups"
+: > "$CONFIG_BACKUPS"
+backup_i=0
+while IFS= read -r dir; do
+    cfg="$dir/config.yaml"
+    mkdir -p "$dir"
+    if [ -s "$cfg" ]; then
+        dest="$TMP_DIR/config.yaml.bak.$backup_i"
+        cp -a "$cfg" "$dest"
+        printf '%s\t%s\n' "$cfg" "$dest" >> "$CONFIG_BACKUPS"
+        echo -e "  ${GREEN}✓${NC} Backed up $cfg"
+    else
+        # Seed so Headcrab's merge has a file to update instead of no-op + delete.
+        printf 'Plugins: yes\n' > "$cfg"
+    fi
+    backup_i=$((backup_i + 1))
+done < <(sls_config_dirs)
+
 if ! download_file "$SLS_URL" "$TMP_HEADCRAB" 60; then
     die "failed to download Headcrab installer script."
 fi
@@ -142,22 +289,30 @@ if [ ! -s "$TMP_HEADCRAB" ]; then
 fi
 
 chmod +x "$TMP_HEADCRAB"
-bash "$TMP_HEADCRAB" "$@"
+headcrab_status=0
+bash "$TMP_HEADCRAB" "$@" || headcrab_status=$?
 echo ""
 
-# Step 3: Ensure Plugins: yes in config.yaml
+# Step 3: Restore config.yaml and ensure Plugins: yes
 echo -e "${GREEN}[3/4] Configuring SLSsteam settings...${NC}"
 echo "----------------------------------------------"
 
-if [ -s "$CONFIG_FILE" ]; then
-    if grep -qE '^[[:space:]]*Plugins:' "$CONFIG_FILE"; then
-        sed -i -E 's/^[[:space:]]*Plugins:[[:space:]]*.*/Plugins: yes/' "$CONFIG_FILE"
-    else
-        printf "\n# Enable Lua plugins from ~/.config/SLSsteam/plugins\nPlugins: yes\n" >> "$CONFIG_FILE"
-    fi
-    echo -e "  ${GREEN}✓${NC} 'Plugins: yes' set in $CONFIG_FILE"
-else
-    echo -e "  ${YELLOW}!${NC} Skipped 'Plugins: yes': $CONFIG_FILE does not exist or is empty."
+if [ -s "$CONFIG_BACKUPS" ]; then
+    while IFS=$'\t' read -r cfg dest; do
+        mkdir -p "$(dirname "$cfg")"
+        merge_user_config "$dest" "$cfg" "$cfg"
+        echo -e "  ${GREEN}✓${NC} Restored user entries in $cfg"
+    done < "$CONFIG_BACKUPS"
+fi
+
+while IFS= read -r dir; do
+    cfg="$dir/config.yaml"
+    enable_plugins_in_config "$cfg"
+    echo -e "  ${GREEN}✓${NC} 'Plugins: yes' set in $cfg"
+done < <(sls_config_dirs)
+
+if [ "$headcrab_status" -ne 0 ]; then
+    die "Headcrab installer failed (exit $headcrab_status)."
 fi
 
 echo ""

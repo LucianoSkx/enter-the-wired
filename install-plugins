@@ -102,7 +102,7 @@ echo ""
 echo -e "${GREEN}[3/3] Configuring SLSsteam settings...${NC}"
 echo "----------------------------------------------"
 
-if [ -f "$CONFIG_FILE" ]; then
+if [ -s "$CONFIG_FILE" ]; then
     if grep -qE '^[[:space:]]*Plugins:' "$CONFIG_FILE"; then
         sed -i -E 's/^[[:space:]]*Plugins:[[:space:]]*.*/Plugins: yes/' "$CONFIG_FILE"
     else
@@ -110,9 +110,7 @@ if [ -f "$CONFIG_FILE" ]; then
     fi
     echo -e "  ${GREEN}✓${NC} 'Plugins: yes' set in $CONFIG_FILE"
 else
-    mkdir -p "$CONFIG_DIR"
-    printf "# Enable Lua plugins from ~/.config/SLSsteam/plugins\nPlugins: yes\n" > "$CONFIG_FILE"
-    echo -e "  ${GREEN}✓${NC} Created $CONFIG_FILE with 'Plugins: yes'"
+    echo -e "  ${YELLOW}!${NC} Skipped 'Plugins: yes': $CONFIG_FILE does not exist or is empty."
 fi
 
 echo ""
@@ -121,6 +119,6 @@ echo "  INSTALLATION COMPLETED SUCCESSFULLY!"
 echo "==============================================${NC}"
 echo ""
 echo "  Plugins directory: $PLUGINS_DIR"
-echo "  Config file:       $CONFIG_FILE (Plugins: yes)"
+echo "  Config file:       $CONFIG_FILE"
 echo "  Restart Steam to load new plugins and configurations."
 echo ""

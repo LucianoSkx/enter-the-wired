@@ -153,6 +153,7 @@ cleanup_slssteam() {
     done
 
     ### files and shortcuts to remove conditionally
+    local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
     local files_to_remove=(
         "$HOME/.local/share/applications/steam.desktop"
         "$HOME/.local/share/applications/accela.desktop"
@@ -162,6 +163,10 @@ cleanup_slssteam() {
         "$HOME/.local/share/applications/headcrab.desktop"
         "$HOME/.local/share/applications/ludusavi.desktop"
         "$HOME/.local/bin/ludusavi"
+        "$HOME/.local/share/applications/psyche.desktop"
+        "$HOME/.local/share/icons/hicolor/scalable/apps/psyche.svg"
+        "$data_home/applications/psyche.desktop"
+        "$data_home/icons/hicolor/scalable/apps/psyche.svg"
     )
 
     for file in "${files_to_remove[@]}"; do
@@ -183,6 +188,7 @@ cleanup_slssteam() {
         "$HOME/.config/ludusavi"
         "$HOME/.var/app/com.valvesoftware.Steam/.local/share/SLSsteam"
         "$HOME/.var/app/com.valvesoftware.Steam/.config/SLSsteam"
+        "$HOME/.local/share/psyche"
     )
 
     for dir in "${dirs_to_remove[@]}"; do

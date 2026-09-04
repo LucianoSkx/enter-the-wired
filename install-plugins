@@ -5,12 +5,17 @@ set -euo pipefail
 # Sets up custom Lua plugins and installs SLSsteam (via Headcrab)
 
 ZIP_URL="https://github.com/ciscosweater/enter-the-wired/releases/download/latest/plugins-deps.zip"
+APP_URL="https://github.com/ciscosweater/enter-the-wired/releases/download/latest/plugins-app.zip"
 SLS_URL="https://raw.githubusercontent.com/Deadboy666/h3adcr-b/main/headcrab.sh?t=$(date +%s)"
 CONFIG_DIR="$HOME/.config/SLSsteam"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 PLUGINS_DIR="$CONFIG_DIR/plugins"
+APP_DEST="$HOME/.local/share/psyche"
+APP_MIN_ZIP_BYTES=1000000
+APP_TMP_NEED_KB=200000
+APP_HOME_NEED_KB=150000
 
-# Colors (disabled if not interactive terminal)
+# Colors (disabled if not a fully interactive terminal)
 if [ -t 1 ] && [ -t 0 ]; then
     GREEN='\033[0;32m'
     RED='\033[0;31m'
@@ -23,49 +28,84 @@ else
     NC=''
 fi
 
+die() {
+    echo -e "${RED}Error: $*${NC}" >&2
+    exit 1
+}
+
+# Download with retries and timeouts. Large max-time shows a progress bar on a TTY.
+download_file() {
+    local url="$1"
+    local dest="$2"
+    local max_time="${3:-120}"
+    local curl_flags=(-fL --retry 3 --retry-delay 2 --retry-connrefused --connect-timeout 20 --max-time "$max_time" -o "$dest")
+
+    if [ -t 1 ] && [ "$max_time" -ge 300 ]; then
+        curl_flags+=(--progress-bar)
+    else
+        curl_flags+=(-sS)
+    fi
+
+    curl "${curl_flags[@]}" "$url"
+}
+
+avail_kb() {
+    df -Pk "$1" 2>/dev/null | awk 'NR==2 {print $4}'
+}
+
+need_free_kb() {
+    local path="$1"
+    local need="$2"
+    local label="$3"
+    local avail
+
+    avail="$(avail_kb "$path")"
+    if [ -z "$avail" ]; then
+        return 0
+    fi
+    if [ "$avail" -lt "$need" ]; then
+        die "not enough free space on $label (need ~$((need / 1024)) MB, have ~$((avail / 1024)) MB)"
+    fi
+}
+
 echo -e "${GREEN}=============================================="
 echo "  LUA PLUGINS + HEADCRAB INSTALLER"
 echo "==============================================${NC}"
 echo ""
 
-# Helper: check for commands
-for cmd in curl unzip sed; do
+for cmd in curl unzip sed find; do
     if ! command -v "$cmd" &>/dev/null; then
-        echo -e "${RED}Error: required command '$cmd' not found. Please install it first.${NC}" >&2
-        exit 1
+        die "required command '$cmd' not found. Please install it first."
     fi
 done
 
-# Cleanup traps on exit / signals
 TMP_DIR="$(mktemp -d)"
 TMP_HEADCRAB="$(mktemp -t headcrab.XXXXXX.sh)"
 
 cleanup() {
-    rm -rf "$TMP_DIR"
-    rm -f "$TMP_HEADCRAB"
+    if [ -n "${TMP_DIR:-}" ]; then
+        rm -rf "$TMP_DIR"
+    fi
+    rm -f "${TMP_HEADCRAB:-}"
 }
 trap cleanup EXIT INT TERM HUP
 
 # Step 1: Download and extract .lua plugins
-echo -e "${GREEN}[1/3] Downloading and installing Lua plugins...${NC}"
+echo -e "${GREEN}[1/4] Downloading and installing Lua plugins...${NC}"
 echo "----------------------------------------------"
 
 if ! mkdir -p "$PLUGINS_DIR"; then
-    echo -e "${RED}Error: failed to create plugins directory at '$PLUGINS_DIR'.${NC}" >&2
-    exit 1
+    die "failed to create plugins directory at '$PLUGINS_DIR'."
 fi
 
 ZIP_FILE="$TMP_DIR/plugins.zip"
 echo "Fetching plugins package from $ZIP_URL..."
-if ! curl -fsSL --retry 3 --retry-delay 2 "$ZIP_URL" -o "$ZIP_FILE"; then
-    echo -e "${RED}Error: failed to download plugins package.${NC}" >&2
-    exit 1
+if ! download_file "$ZIP_URL" "$ZIP_FILE" 120; then
+    die "failed to download plugins package."
 fi
 
-# Verify downloaded zip integrity
-if ! unzip -tq "$ZIP_FILE" &>/dev/null; then
-    echo -e "${RED}Error: downloaded zip file is corrupted or invalid.${NC}" >&2
-    exit 1
+if [ ! -s "$ZIP_FILE" ] || ! unzip -tq "$ZIP_FILE" &>/dev/null; then
+    die "downloaded zip file is corrupted or invalid."
 fi
 
 echo "Extracting .lua files into $PLUGINS_DIR..."
@@ -73,25 +113,32 @@ echo "Extracting .lua files into $PLUGINS_DIR..."
 # -o: overwrite existing files without prompting
 # -q: quiet mode
 if ! unzip -j -o -q "$ZIP_FILE" "*.lua" -d "$PLUGINS_DIR"; then
-    echo -e "${RED}Error: failed to extract .lua files into '$PLUGINS_DIR'.${NC}" >&2
-    exit 1
+    die "failed to extract .lua files into '$PLUGINS_DIR'."
 fi
 
 echo -e "${GREEN}Lua plugins deployed:${NC}"
+shopt -s nullglob
+lua_found=0
 for file in "$PLUGINS_DIR"/*.lua; do
-    if [ -f "$file" ]; then
-        echo "  - $(basename "$file")"
-    fi
+    lua_found=1
+    echo "  - $(basename "$file")"
 done
+shopt -u nullglob
+if [ "$lua_found" -eq 0 ]; then
+    die "no .lua plugins were installed into '$PLUGINS_DIR'."
+fi
 echo ""
 
 # Step 2: Run Headcrab (SLSsteam installer)
-echo -e "${GREEN}[2/3] Fetching and running Headcrab (SLSsteam)...${NC}"
+echo -e "${GREEN}[2/4] Fetching and running Headcrab (SLSsteam)...${NC}"
 echo "----------------------------------------------"
 
-if ! curl -fsSL --retry 3 --retry-delay 2 "$SLS_URL" -o "$TMP_HEADCRAB"; then
-    echo -e "${RED}Error: failed to download Headcrab installer script.${NC}" >&2
-    exit 1
+if ! download_file "$SLS_URL" "$TMP_HEADCRAB" 60; then
+    die "failed to download Headcrab installer script."
+fi
+
+if [ ! -s "$TMP_HEADCRAB" ]; then
+    die "Headcrab installer script is empty."
 fi
 
 chmod +x "$TMP_HEADCRAB"
@@ -99,7 +146,7 @@ bash "$TMP_HEADCRAB" "$@"
 echo ""
 
 # Step 3: Ensure Plugins: yes in config.yaml
-echo -e "${GREEN}[3/3] Configuring SLSsteam settings...${NC}"
+echo -e "${GREEN}[3/4] Configuring SLSsteam settings...${NC}"
 echo "----------------------------------------------"
 
 if [ -s "$CONFIG_FILE" ]; then
@@ -113,6 +160,101 @@ else
     echo -e "  ${YELLOW}!${NC} Skipped 'Plugins: yes': $CONFIG_FILE does not exist or is empty."
 fi
 
+echo ""
+
+# Step 4: Download and install plugins app
+echo -e "${GREEN}[4/4] Downloading and installing plugins app...${NC}"
+echo "----------------------------------------------"
+
+if [ "$(uname -s)" != "Linux" ]; then
+    die "plugins app requires Linux."
+fi
+
+arch="$(uname -m)"
+case "$arch" in
+    x86_64|amd64) ;;
+    *) die "plugins app requires x86_64 (this machine is '$arch')." ;;
+esac
+
+glibc_ver="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+if [ -n "$glibc_ver" ] && [ "$glibc_ver" != "2.41" ] && printf '%s\n%s\n' "$glibc_ver" "2.41" | sort -C -V; then
+    echo -e "  ${YELLOW}!${NC} glibc $glibc_ver detected; plugins app expects 2.41+. Install may succeed but the app may not start."
+fi
+
+if command -v pgrep >/dev/null 2>&1 && pgrep -x psyche >/dev/null 2>&1; then
+    die "plugins app is currently running. Close it and re-run this installer."
+fi
+
+need_free_kb "$TMP_DIR" "$APP_TMP_NEED_KB" "temporary storage"
+need_free_kb "$HOME" "$APP_HOME_NEED_KB" "home directory"
+
+APP_ZIP="$TMP_DIR/plugins-app.zip"
+APP_EXTRACT="$TMP_DIR/plugins-app"
+
+echo "Fetching plugins app (~47 MB) from $APP_URL..."
+if ! download_file "$APP_URL" "$APP_ZIP" 600; then
+    die "failed to download plugins app."
+fi
+
+if [ ! -s "$APP_ZIP" ]; then
+    die "downloaded plugins app is empty."
+fi
+
+zip_bytes="$(wc -c < "$APP_ZIP" | tr -d ' ')"
+if [ "$zip_bytes" -lt "$APP_MIN_ZIP_BYTES" ]; then
+    die "downloaded plugins app is too small ($zip_bytes bytes); the download is incomplete or invalid."
+fi
+
+if ! unzip -tq "$APP_ZIP" &>/dev/null; then
+    die "downloaded plugins app zip is corrupted or invalid."
+fi
+
+if unzip -Z1 "$APP_ZIP" 2>/dev/null | grep -qE '(^|/)\.\.(/|$)'; then
+    die "plugins app zip contains unsafe paths."
+fi
+
+if ! mkdir -p "$APP_EXTRACT"; then
+    die "failed to create extract directory."
+fi
+
+if ! unzip -o -q "$APP_ZIP" -d "$APP_EXTRACT"; then
+    die "failed to extract plugins app."
+fi
+
+INSTALL_SH=""
+while IFS= read -r -d '' candidate; do
+    if [ -n "$INSTALL_SH" ]; then
+        die "plugins app package is malformed (multiple installer scripts)."
+    fi
+    INSTALL_SH="$candidate"
+done < <(find "$APP_EXTRACT" -maxdepth 3 -type f -name install.sh -print0)
+
+if [ -z "$INSTALL_SH" ]; then
+    die "plugins app installer script not found."
+fi
+
+BUNDLE_DIR="$(CDPATH= cd -- "$(dirname -- "$INSTALL_SH")" && pwd)"
+extract_real="$(CDPATH= cd -- "$APP_EXTRACT" && pwd)"
+case "$BUNDLE_DIR" in
+    "$extract_real"|"$extract_real"/*) ;;
+    *) die "plugins app installer resolved outside the extract directory." ;;
+esac
+
+for rel in install.sh psyche psyche.svg bin/psyche lib plugins qml fontconfig; do
+    if [ ! -e "$BUNDLE_DIR/$rel" ]; then
+        die "plugins app package is incomplete."
+    fi
+done
+
+if ! sh "$INSTALL_SH" >/dev/null; then
+    die "failed to install plugins app."
+fi
+
+if [ ! -x "$APP_DEST/bin/psyche" ]; then
+    die "plugins app installer finished but the launcher is missing."
+fi
+
+echo -e "  ${GREEN}✓${NC} Plugins app installed"
 echo ""
 echo -e "${GREEN}=============================================="
 echo "  INSTALLATION COMPLETED SUCCESSFULLY!"

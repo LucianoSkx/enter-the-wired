@@ -1,5 +1,9 @@
 # Enter the Wired
 
+Everything this installer needs is hosted **in this repository**: scripts,
+vendored assets (`vendor/`) and release assets (`latest` release here).
+No third-party hosts are required.
+
 ## Install
 
 ### Full (ACCELA + SLSsteam + CloudRedirect)
@@ -12,12 +16,23 @@ curl -fsSL https://raw.githubusercontent.com/LucianoSkx/enter-the-wired/main/ent
 curl -fsSL https://raw.githubusercontent.com/LucianoSkx/enter-the-wired/main/install-plugins | bash
 ```
 
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `enter-the-wired` | Full combo installer (ACCELA + Headcrab + CloudRedirect) |
+| `accela` | ACCELA installer (uses this repo's `deps.tar.gz` release asset) |
+| `install-plugins` | Lua plugins + plugins app (uses this repo's release assets) |
+| `cloudredirect` | Native CloudRedirect installer (uses `vendor/cloudredirect/`) |
+| `fix-deps` | System dependency repair |
+| `uninstall` | Removes everything |
+| `vendor/headcrab.sh` | Vendored Headcrab (SLSsteam) installer |
+| `vendor/cloudredirect/` | Vendored CloudRedirect stack: `.so`, CLI, Qt6 GUI source, icons, `steam.sh` loaders, stock `client.sh` |
+
 ## CloudRedirect
 
-The full installer also sets up [CloudRedirect](https://github.com/Selectively11/CloudRedirect)
-using the [cloudredirect-moon](https://github.com/swwayps/cloudredirect-moon) fork
-(cross-distro attach fixes, legacy save-layout healing, worker-thread crash
-containment), installed **natively** — no Flatpak:
+Installed **natively** — no Flatpak — from the vendored
+[cloudredirect-moon](https://github.com/swwayps/cloudredirect-moon) stack:
 
 - `~/.local/share/CloudRedirect/cloud_redirect.so` — 32-bit hook, loaded into
   Steam via `LD_PRELOAD` by the patched `steam.sh`
@@ -43,6 +58,6 @@ possible). Then open the GUI, sign in to your provider, add the games under
 
 - **ciscosweater** — Enter the Wired (original installer)
 - **Selectively11** — CloudRedirect upstream
-- **swwayps** — cloudredirect-moon (Linux fixes used here)
-- **Deadboy666** — Headcrab (h3adcr-b)
+- **swwayps** — cloudredirect-moon (Linux fixes vendored here)
+- **Deadboy666** — Headcrab (h3adcr-b), vendored
 - **AceSLS** — SLSsteam

@@ -4,14 +4,15 @@ set -euo pipefail
 # CloudRedirect Native Installer (cloudredirect-moon)
 # Part of Enter The Wired project
 #
-# Deploys the 32-bit cloud_redirect.so from swwayps/cloudredirect-moon,
-# enables Steam Cloud in the SLSsteam config, patches steam.sh with the
-# CloudRedirect loader and builds the native Qt6 GUI (.desktop entry).
+# Deploys the vendored 32-bit cloud_redirect.so, enables Steam Cloud in the
+# SLSsteam config, patches steam.sh with the CloudRedirect loader and builds
+# the native Qt6 GUI (.desktop entry). All assets live in vendor/ of this
+# repository - no external hosts are required (the repo tarball is the only
+# fallback when this script runs without its vendor/ directory).
 
-MOON_REPO="https://github.com/swwayps/cloudredirect-moon"
-MOON_RAW="https://raw.githubusercontent.com/swwayps/cloudredirect-moon/master"
-CR_STEAM_SH_NATIVE="https://cdn.jsdelivr.net/gh/Deadboy666/h3adcr-b-modul3s@refs/heads/cr-test/headcrab_native.sh"
-CR_STEAM_SH_FLATPAK="https://cdn.jsdelivr.net/gh/Deadboy666/h3adcr-b-modul3s@refs/heads/cr-test/headcrab_flatpak.sh"
+REPO_TARBALL_URL="https://codeload.github.com/LucianoSkx/enter-the-wired/tar.gz/refs/heads/main"
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ASSETS=""
 
 XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -87,6 +88,50 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+CLEANUP_DIRS=()
+cleanup_all() {
+    local d
+    for d in ${CLEANUP_DIRS[@]+"${CLEANUP_DIRS[@]}"}; do
+        if [ -n "$d" ] && [ -d "$d" ]; then
+            rm -rf "$d"
+        fi
+    done
+}
+trap cleanup_all EXIT
+
+# Assets are vendored in vendor/cloudredirect of this repository. When the
+# script is executed without that directory (curl | bash), fetch the repo
+# tarball once and use the vendored copy from it.
+resolve_assets_dir() {
+    local candidate tmp tarball inner
+
+    for candidate in \
+        "$SELF_DIR/vendor/cloudredirect" \
+        "$HOME/enter-the-wired/vendor/cloudredirect"; do
+        if [ -f "$candidate/cloud_redirect.so" ] && [ -d "$candidate/ui-linux" ]; then
+            ASSETS="$candidate"
+            echo "Assets: $ASSETS"
+            return 0
+        fi
+    done
+
+    echo "Local vendor/ not found - fetching assets from the repository tarball..."
+    tmp="$(mktemp -d)"
+    CLEANUP_DIRS+=("$tmp")
+    tarball="$tmp/repo.tar.gz"
+    download_file "$REPO_TARBALL_URL" "$tarball" 300 \
+        || die "could not download the repository tarball ($REPO_TARBALL_URL)"
+    tar -xzf "$tarball" -C "$tmp" \
+        || die "could not extract the repository tarball"
+
+    inner="$tmp/enter-the-wired-main"
+    if [ ! -f "$inner/vendor/cloudredirect/cloud_redirect.so" ]; then
+        die "vendor/cloudredirect is missing from the repository tarball"
+    fi
+    ASSETS="$inner/vendor/cloudredirect"
+    echo "Assets: $ASSETS (from repository tarball)"
+}
 
 detect_distro_family() {
     local ID="" ID_LIKE=""
@@ -264,13 +309,6 @@ ensure_build_deps() {
     fi
 }
 
-cleanup_src() {
-    if [ -n "${BUILD_SRC_DIR:-}" ] && [ -d "$BUILD_SRC_DIR" ]; then
-        rm -rf "$BUILD_SRC_DIR"
-    fi
-    BUILD_SRC_DIR=""
-}
-
 build_ui() {
     local so_sha="$1"
     local generator=() jobs build_dir
@@ -286,18 +324,15 @@ build_ui() {
         return 0
     fi
 
+    if [ ! -d "$ASSETS/ui-linux" ]; then
+        echo -e "${YELLOW}[WARN] Vendored UI source not found at $ASSETS/ui-linux - GUI not built.${NC}"
+        return 0
+    fi
+
     ensure_build_deps
 
     BUILD_SRC_DIR="$(mktemp -d)"
-    trap cleanup_src EXIT
-
-    echo "Downloading cloudredirect-moon source..."
-    if ! git clone --depth 1 -q "$MOON_REPO" "$BUILD_SRC_DIR" 2>/dev/null; then
-        echo -e "${YELLOW}[WARN] Could not clone $MOON_REPO - GUI not built.${NC}"
-        cleanup_src
-        trap - EXIT
-        return 0
-    fi
+    CLEANUP_DIRS+=("$BUILD_SRC_DIR")
 
     if command -v ninja >/dev/null 2>&1; then
         generator=(-G Ninja)
@@ -306,13 +341,11 @@ build_ui() {
     build_dir="$BUILD_SRC_DIR/build-ui"
 
     echo "Building native GUI (this can take a minute)..."
-    if ! cmake -S "$BUILD_SRC_DIR/ui-linux" -B "$build_dir" "${generator[@]}" -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1 \
+    if ! cmake -S "$ASSETS/ui-linux" -B "$build_dir" "${generator[@]}" -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1 \
         || ! cmake --build "$build_dir" -j"$jobs" >/dev/null 2>&1 \
         || [ ! -x "$build_dir/cloud-redirect-ui" ]; then
         echo -e "${YELLOW}[WARN] GUI build failed - .so and config were installed anyway.${NC}"
         echo "       Install qt6-base + qt6-declarative and re-run ./cloudredirect."
-        cleanup_src
-        trap - EXIT
         return 0
     fi
 
@@ -320,19 +353,19 @@ build_ui() {
     cp -f "$build_dir/cloud-redirect-ui" "$CR_UI"
     chmod 755 "$CR_UI"
     printf '%s\n' "$so_sha" > "$CR_STAMP"
-    cleanup_src
-    trap - EXIT
     echo -e "${GREEN}GUI installed: $CR_UI${NC}"
 }
 
 install_icons() {
     local sizes=(16 32 48 64 128 256 512)
-    local size
+    local size src
 
     for size in "${sizes[@]}"; do
+        src="$ASSETS/icons/${size}x${size}/apps/cloudredirect.png"
         mkdir -p "$ICONS_DIR/${size}x${size}/apps"
-        if ! download_file "$MOON_RAW/flatpak/icons/${size}x${size}/apps/cloudredirect.png" \
-            "$ICONS_DIR/${size}x${size}/apps/cloudredirect.png" 60 2>/dev/null; then
+        if [ -f "$src" ]; then
+            cp -f "$src" "$ICONS_DIR/${size}x${size}/apps/cloudredirect.png"
+        else
             rm -f "$ICONS_DIR/${size}x${size}/apps/cloudredirect.png"
         fi
     done
@@ -375,10 +408,13 @@ echo "SLSsteam:  $SLS_DIR"
 echo "steam.sh:  $STEAM_SH"
 echo ""
 
-echo "Downloading CloudRedirect binaries from cloudredirect-moon..."
+resolve_assets_dir
+echo ""
+
+echo "Staging CloudRedirect binaries from vendored assets..."
 mkdir -p "$CR_STAGE"
-download_file "$MOON_RAW/cloud_redirect.so" "$CR_STAGE/cloud_redirect.so" 300
-download_file "$MOON_RAW/cloud_redirect_cli" "$CR_STAGE/cloud_redirect_cli" 300
+cp -f "$ASSETS/cloud_redirect.so" "$CR_STAGE/cloud_redirect.so"
+cp -f "$ASSETS/cloud_redirect_cli" "$CR_STAGE/cloud_redirect_cli"
 chmod 755 "$CR_STAGE/cloud_redirect.so" "$CR_STAGE/cloud_redirect_cli"
 
 is_elf32 "$CR_STAGE/cloud_redirect.so" || die "cloud_redirect.so is not a 32-bit ELF (bad download)"
@@ -414,18 +450,23 @@ if grep -q "cloud_redirect" "$STEAM_SH" 2>/dev/null; then
     echo "steam.sh already loads CloudRedirect: $STEAM_SH"
 else
     echo "Patching steam.sh with the CloudRedirect loader..."
-    CR_SH_URL="$CR_STEAM_SH_NATIVE"
-    CLIENT_SH_URL="https://cdn.jsdelivr.net/gh/Deadboy666/SteamTracking@refs/heads/master/ClientExtracted/steam.sh"
+    CR_SH_SRC="$ASSETS/headcrab_native.sh"
     EXPECTED_CLIENT="$HOME/.steam/steam/client.sh"
     if [ -d "$FLATPAK_STEAM_DIR" ]; then
-        CR_SH_URL="$CR_STEAM_SH_FLATPAK"
+        CR_SH_SRC="$ASSETS/headcrab_flatpak.sh"
         EXPECTED_CLIENT="$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/client.sh"
+    fi
+    if [ ! -f "$CR_SH_SRC" ]; then
+        die "vendored loader missing: $CR_SH_SRC"
     fi
 
     mkdir -p "$(dirname "$EXPECTED_CLIENT")"
     if [ ! -f "$EXPECTED_CLIENT" ]; then
         echo "Saving the stock Steam client script to $EXPECTED_CLIENT..."
-        download_file "$CLIENT_SH_URL" "$EXPECTED_CLIENT" 120 || die "could not fetch the stock steam.sh (client.sh)"
+        if [ ! -f "$ASSETS/client.sh" ]; then
+            die "vendored stock steam.sh missing: $ASSETS/client.sh"
+        fi
+        cp -f "$ASSETS/client.sh" "$EXPECTED_CLIENT"
         chmod 755 "$EXPECTED_CLIENT"
     fi
 
@@ -433,7 +474,7 @@ else
         cp -f "$STEAM_SH" "$STEAM_SH.etw-bak"
     fi
     chmod u+w "$STEAM_SH" 2>/dev/null || sudo chmod u+w "$STEAM_SH"
-    download_file "$CR_SH_URL" "$STEAM_SH" 120 || die "could not fetch the CloudRedirect steam.sh"
+    cp -f "$CR_SH_SRC" "$STEAM_SH" || die "could not install the CloudRedirect steam.sh"
     chmod 555 "$STEAM_SH" 2>/dev/null || sudo chmod 555 "$STEAM_SH"
     echo "  Patched: $STEAM_SH (backup at $STEAM_SH.etw-bak)"
 fi

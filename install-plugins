@@ -4,9 +4,9 @@ set -euo pipefail
 # Lua Plugins + Headcrab Installer
 # Sets up custom Lua plugins and installs SLSsteam (via Headcrab)
 
-ZIP_URL="https://github.com/ciscosweater/enter-the-wired/releases/download/latest/plugins-deps.zip"
-APP_URL="https://github.com/ciscosweater/enter-the-wired/releases/download/latest/plugins-app.zip"
-SLS_URL="https://raw.githubusercontent.com/Deadboy666/h3adcr-b/main/headcrab.sh?t=$(date +%s)"
+ZIP_URL="https://github.com/LucianoSkx/enter-the-wired/releases/download/latest/plugins-deps.zip"
+APP_URL="https://github.com/LucianoSkx/enter-the-wired/releases/download/latest/plugins-app.zip"
+SLS_URL="https://raw.githubusercontent.com/LucianoSkx/enter-the-wired/main/vendor/headcrab.sh?t=$(date +%s)"
 NATIVE_CONFIG_DIR="$HOME/.config/SLSsteam"
 FLATPAK_STEAM_DIR="$HOME/.var/app/com.valvesoftware.Steam/.steam/steam"
 FLATPAK_CONFIG_DIR="$HOME/.var/app/com.valvesoftware.Steam/.config/SLSsteam"

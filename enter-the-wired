@@ -10,8 +10,9 @@ set -euo pipefail
 GITHUB_USER="LucianoSkx"
 GITHUB_REPO="enter-the-wired"
 
-# Headcrab (SLSsteam replacement) - execute remotely in a subshell
-SLS_URL="https://raw.githubusercontent.com/Deadboy666/h3adcr-b/main/headcrab.sh?t=$(date +%s)"
+# Repository archive - single self-hosted fetch that carries the scripts and
+# the vendored assets (headcrab.sh + CloudRedirect stack).
+REPO_TARBALL_URL="https://codeload.github.com/$GITHUB_USER/$GITHUB_REPO/tar.gz/refs/heads/main"
 
 # Detect if running via curl | bash (BASH_SOURCE empty or BASH_SOURCE[0] == "-")
 RUNNING_VIA_PIPE=false
@@ -52,22 +53,21 @@ get_sls_install_dir() {
 }
 
 if [ "$RUNNING_VIA_PIPE" = true ]; then
-    # Running via curl | bash - need to fetch scripts from GitHub
-    echo -e "${GREEN}Detected pipe execution, fetching scripts from GitHub...${NC}"
+    # Running via curl | bash - fetch the repository archive (scripts + vendor)
+    echo -e "${GREEN}Detected pipe execution, fetching repository archive...${NC}"
 
-    SCRIPT_DIR=$(mktemp -d)
-    trap "rm -rf $SCRIPT_DIR" EXIT
+    TMP_ROOT=$(mktemp -d)
+    trap "rm -rf $TMP_ROOT" EXIT
 
-    # Fetch helper scripts; run Headcrab (SLSsteam) remotely in a subshell
-    curl -fsSL --retry 3 --retry-delay 2 -o "$SCRIPT_DIR/accela" "https://raw.githubusercontent.com/$GITHUB_USER/$GITHUB_REPO/main/accela?t=$(date +%s)"
-    curl -fsSL --retry 3 --retry-delay 2 -o "$SCRIPT_DIR/fix-deps" "https://raw.githubusercontent.com/$GITHUB_USER/$GITHUB_REPO/main/fix-deps?t=$(date +%s)"
-    curl -fsSL --retry 3 --retry-delay 2 -o "$SCRIPT_DIR/cloudredirect" "https://raw.githubusercontent.com/$GITHUB_USER/$GITHUB_REPO/main/cloudredirect?t=$(date +%s)"
+    curl -fsSL --retry 3 --retry-delay 2 -H "Cache-Control: no-cache" \
+        -o "$TMP_ROOT/repo.tar.gz" "$REPO_TARBALL_URL"
+    tar -xzf "$TMP_ROOT/repo.tar.gz" -C "$TMP_ROOT"
+    SCRIPT_DIR="$TMP_ROOT/enter-the-wired-main"
 
     chmod +x "$SCRIPT_DIR/accela" "$SCRIPT_DIR/fix-deps" "$SCRIPT_DIR/cloudredirect"
 
-    # Defer Headcrab execution until after other components are installed.
-    # When running via pipe we fetch helpers only; Headcrab will be executed
-    # later in the installer so it runs as the final step and only once.
+    # Defer Headcrab execution until after other components are installed so
+    # it runs as the final step and only once.
     echo -e "${GREEN}Deferring Headcrab execution until after installations...${NC}"
 else
     # Local execution - source from same directory
@@ -85,6 +85,11 @@ else
         echo "Error: cloudredirect not found in $SCRIPT_DIR"
         exit 1
     fi
+fi
+
+if [ ! -f "$SCRIPT_DIR/vendor/headcrab.sh" ]; then
+    echo "Error: vendor/headcrab.sh not found in $SCRIPT_DIR"
+    exit 1
 fi
 
 echo -e "${GREEN}=============================================="
@@ -121,14 +126,10 @@ echo ""
 # keep the installer's shell isolated from the remote script's environment.
 source "$SCRIPT_DIR/accela"
 
-# Execute Headcrab via a temporary downloaded script so it can determine its
-# real script directory (avoids /proc/.../fd/ issues from process substitution)
+# Execute the vendored Headcrab (SLSsteam) in a subshell to keep the
+# installer's shell isolated from the script's environment.
 (
-    tmp_headcrab_script=$(mktemp -t headcrab.XXXX.sh)
-    trap 'rm -f "$tmp_headcrab_script"' EXIT
-    curl -fsSL --retry 3 --retry-delay 2 "$SLS_URL" -o "$tmp_headcrab_script"
-    chmod +x "$tmp_headcrab_script"
-    bash "$tmp_headcrab_script" "$@"
+    bash "$SCRIPT_DIR/vendor/headcrab.sh" "$@"
 )
 
 # CloudRedirect (cloudredirect-moon): .so + steam.sh loader + native GUI.
@@ -154,37 +155,27 @@ echo "  Open the CloudRedirect app to pick your cloud provider,"
 echo "  then restart Steam."
 echo ""
 
-# Download scripts to ~/enter-the-wired for future use
+# Copy scripts and the vendored assets to ~/enter-the-wired for future use
 echo "Saving scripts to ~/enter-the-wired..."
 echo "----------------------------------------------"
 
 ENTER_THE_WIRED_DIR="$HOME/enter-the-wired"
 mkdir -p "$ENTER_THE_WIRED_DIR"
 
-# Save a component script: copy from the local checkout, or fetch from GitHub
-# when running via curl | bash.
 save_script() {
-    local name="$1"
-
-    if [ "$RUNNING_VIA_PIPE" = true ]; then
-        curl -fsSL --retry 3 --retry-delay 2 -o "$ENTER_THE_WIRED_DIR/$name" "https://raw.githubusercontent.com/$GITHUB_USER/$GITHUB_REPO/main/$name?t=$(date +%s)"
-    else
-        cp -f "$SCRIPT_DIR/$name" "$ENTER_THE_WIRED_DIR/$name"
-    fi
+    cp -f "$SCRIPT_DIR/$1" "$ENTER_THE_WIRED_DIR/$1"
 }
 
 save_script accela
 save_script fix-deps
 save_script cloudredirect
 save_script uninstall
+rm -rf "$ENTER_THE_WIRED_DIR/vendor"
+cp -r "$SCRIPT_DIR/vendor" "$ENTER_THE_WIRED_DIR/vendor"
 cat > "$ENTER_THE_WIRED_DIR/slssteam" << 'EOF'
 #!/usr/bin/env bash
-# Wrapper: download Headcrab to a temp file and execute it (ensures SCRIPT_DIR)
-tmp_headcrab_script=$(mktemp -t headcrab.XXXX.sh)
-curl -fsSL --retry 3 --retry-delay 2 "https://raw.githubusercontent.com/Deadboy666/h3adcr-b/main/headcrab.sh?t=$(date +%s)" -o "$tmp_headcrab_script"
-chmod +x "$tmp_headcrab_script"
-bash "$tmp_headcrab_script" "$@"
-rm -f "$tmp_headcrab_script"
+# Wrapper: run the vendored Headcrab (SLSsteam) installer
+exec bash "$HOME/enter-the-wired/vendor/headcrab.sh" "$@"
 EOF
 
 # Set execute permissions (ignore if files don't exist)
@@ -193,6 +184,7 @@ chmod +x "$ENTER_THE_WIRED_DIR/slssteam" 2>/dev/null || true
 chmod +x "$ENTER_THE_WIRED_DIR/fix-deps" 2>/dev/null || true
 chmod +x "$ENTER_THE_WIRED_DIR/cloudredirect" 2>/dev/null || true
 chmod +x "$ENTER_THE_WIRED_DIR/uninstall" 2>/dev/null || true
+chmod +x "$ENTER_THE_WIRED_DIR/vendor/headcrab.sh" 2>/dev/null || true
 
 echo -e "${GREEN}Scripts saved to $ENTER_THE_WIRED_DIR${NC}"
 echo ""

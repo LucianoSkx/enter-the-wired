@@ -163,7 +163,6 @@
             echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
             cat ~/.SLSsteam.log
             echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
-            notify-send -e -i $NOTIF -a "h3adcr-b " "The Headcrab Approaches.. " "Client: $versionnumber "  & sleep 1s
             }
 
             wheresteampackage(){
@@ -179,6 +178,9 @@
         CheckClientInfo
         echo "Loaded SLSsteam" & export $INJECT_SLS &> /dev/null
         echo "Loaded CloudRedirect" & export $INJECT_CR &> /dev/null
+        notif_icon="$NOTIF"
+        [ -f "$notif_icon" ] || notif_icon="steam"
+        notify-send -e -i "$notif_icon" -a "SLSsteam" "Start SLSsteam" "SLSsteam + CloudRedirect loaded (client ${versionnumber:-unknown})" & sleep 1
         source $STEAM_CLIENT "$@" &> /dev/null
         }
 

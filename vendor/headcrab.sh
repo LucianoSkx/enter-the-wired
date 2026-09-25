@@ -810,24 +810,10 @@
                 }
     
     crinstall(){
-      if crconfigcheck; then
-        InstallFlatpakDep || return 1
-        echo "Downloading Latest Cloud Redirect Library"
-        whereCR_Install
-		 echo "Installing Cloud Redirect App"
-		    flatpak remote-add --user --if-not-exists cloudredirect $cloudredirect
-		    flatpak remote-add --user --if-not-exists flathub $flathub
-		    flatpak --user update --appstream --noninteractive
-		    flatpak install --user flathub org.kde.Platform//6.10 --assumeyes --noninteractive
-		    flatpak install --user --reinstall org.cloudredirect.CloudRedirect --assumeyes --noninteractive
-		    update-desktop-database
-        wget -O cloud_redirect.so "$CloudRedirectLib" &> /dev/null
-		wget -O cloud_redirect_lib "$CloudRedirectCLI" &> /dev/null
-		chmod 777 cloud_redirect_lib
-        echo "Latest Cloud Redirect Library Downloaded"
-      else
-        echo "User Is Not Using Cloud Redirect Skipping.."
-      fi
+      # PATCHED (enter-the-wired): Flatpak install of CloudRedirect removed.
+      # The native CloudRedirect stack is deployed by ./cloudredirect from
+      # vendor/cloudredirect instead - no Flatpak, no extra remotes.
+      echo "CloudRedirect: Flatpak install skipped (native mode)"
         echo "" &> /dev/null
         }
         

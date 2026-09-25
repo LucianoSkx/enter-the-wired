@@ -82,11 +82,37 @@ is_bazzite() {
     return 1
 }
 
-# Install packages one by one, skipping unavailable ones
+# Check if a package is already installed for the given distro family
+pkg_installed() {
+    local pkg="$1"
+    local family="$2"
+
+    case "$family" in
+        arch)
+            pacman -Q "$pkg" >/dev/null 2>&1
+            ;;
+        debian)
+            [ "$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null)" = "install ok installed" ]
+            ;;
+        fedora|opensuse)
+            rpm -q "$pkg" >/dev/null 2>&1
+            ;;
+        void)
+            xbps-query -p pkgver "$pkg" >/dev/null 2>&1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Install packages one by one, skipping already installed and unavailable ones
 install_packages() {
     local packages="$1"
     local family="$2"
     local skipped=0
+    local missing=""
+    local pkg
 
     if [ "$family" = "void" ]; then
         if ! xbps-query -l | grep -q "void-repo-multilib"; then
@@ -98,15 +124,28 @@ install_packages() {
                 su -c "xbps-install -y void-repo-multilib 2>/dev/null || true && xbps-install -Sy >/dev/null 2>&1"
             fi
         fi
-        if command -v sudo &>/dev/null; then
-            sudo xbps-install -y $packages
-        else
-            su -c "xbps-install -y $packages"
+        for pkg in $packages; do
+            if pkg_installed "$pkg" "$family"; then
+                echo -e "  ${GREEN}=${NC} $pkg (already installed)"
+            else
+                missing="$missing $pkg"
+            fi
+        done
+        if [ -n "${missing# }" ]; then
+            if command -v sudo &>/dev/null; then
+                sudo xbps-install -y $missing
+            else
+                su -c "xbps-install -y $missing"
+            fi
         fi
         return 0
     fi
 
     for pkg in $packages; do
+        if pkg_installed "$pkg" "$family"; then
+            echo -e "  ${GREEN}=${NC} $pkg (already installed)"
+            continue
+        fi
         case "$family" in
             fedora)
                 if sudo dnf install -y --setopt=install_weak_deps=False "$pkg" 2>/dev/null; then

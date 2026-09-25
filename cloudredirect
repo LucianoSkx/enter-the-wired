@@ -157,12 +157,40 @@ detect_distro_family() {
     fi
 }
 
+# Check if a package is already installed for the given distro family
+pkg_installed() {
+    local pkg="$1"
+    local family="$2"
+
+    case "$family" in
+        arch)
+            pacman -Q "$pkg" >/dev/null 2>&1
+            ;;
+        debian)
+            [ "$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null)" = "install ok installed" ]
+            ;;
+        fedora|opensuse)
+            rpm -q "$pkg" >/dev/null 2>&1
+            ;;
+        void)
+            xbps-query -p pkgver "$pkg" >/dev/null 2>&1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 install_packages() {
     local packages="$1"
     local family="$2"
     local pkg
 
     for pkg in $packages; do
+        if pkg_installed "$pkg" "$family"; then
+            echo -e "  ${GREEN}=${NC} $pkg (already installed)"
+            continue
+        fi
         case "$family" in
             fedora)
                 sudo dnf install -y --setopt=install_weak_deps=False "$pkg" 2>/dev/null \

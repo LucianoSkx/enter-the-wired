@@ -98,6 +98,8 @@ cleanup_ld_audit() {
     for steam_sh in \
         "$HOME/.steam/steam/steam.sh" \
         "$HOME/.local/share/Steam/steam.sh" \
+        "$HOME/.var/app/com.valvesoftware.Steam/.steam/steam/steam.sh" \
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steam.sh" \
         "/var/home/$USER/.steam/steam/steam.sh" \
         "/var/home/$USER/.local/share/Steam/steam.sh" \
         "/usr/share/steam/steam.sh"; do
@@ -106,6 +108,17 @@ cleanup_ld_audit() {
                 ### use sudo as fallback if file is locked
                 sudo sed -i '/export LD_AUDIT.*SLSsteam/d' "$steam_sh" 2>/dev/null || sed -i '/export LD_AUDIT.*SLSsteam/d' "$steam_sh"
                 echo "  Cleaned: $steam_sh"
+            fi
+            if grep -q "cloud_redirect" "$steam_sh" 2>/dev/null; then
+                if [ -f "$steam_sh.etw-bak" ]; then
+                    sudo chmod u+w "$steam_sh" 2>/dev/null || chmod u+w "$steam_sh" 2>/dev/null || true
+                    sudo cp -f "$steam_sh.etw-bak" "$steam_sh" 2>/dev/null || cp -f "$steam_sh.etw-bak" "$steam_sh"
+                    sudo rm -f "$steam_sh.etw-bak" 2>/dev/null || rm -f "$steam_sh.etw-bak"
+                    echo "  Restored pre-CloudRedirect steam.sh: $steam_sh"
+                else
+                    sudo sed -i '/INJECT_CR/d;/Loaded CloudRedirect/d' "$steam_sh" 2>/dev/null || sed -i '/INJECT_CR/d;/Loaded CloudRedirect/d' "$steam_sh"
+                    echo "  Cleaned CloudRedirect: $steam_sh"
+                fi
             fi
         fi
     done
@@ -167,7 +180,12 @@ cleanup_slssteam() {
         "$HOME/.local/share/icons/hicolor/scalable/apps/psyche.svg"
         "$data_home/applications/psyche.desktop"
         "$data_home/icons/hicolor/scalable/apps/psyche.svg"
+        "$data_home/applications/cloudredirect.desktop"
     )
+
+    for size in 16 32 48 64 128 256 512; do
+        files_to_remove+=("$data_home/icons/hicolor/${size}x${size}/apps/cloudredirect.png")
+    done
 
     for file in "${files_to_remove[@]}"; do
         if [ -f "$file" ]; then
@@ -182,12 +200,14 @@ cleanup_slssteam() {
         "$HOME/.local/share/SLSsteam"
         "$HOME/.config/SLSsteam"
         "$HOME/.local/share/CloudRedirect"
+        "$HOME/.local/share/cloud_redirect"
         "$HOME/.config/CloudRedirect"
         "$HOME/enter-the-wired"
         "$HOME/.local/share/ludusavi"
         "$HOME/.config/ludusavi"
         "$HOME/.var/app/com.valvesoftware.Steam/.local/share/SLSsteam"
         "$HOME/.var/app/com.valvesoftware.Steam/.config/SLSsteam"
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/CloudRedirect"
         "$HOME/.local/share/psyche"
     )
 

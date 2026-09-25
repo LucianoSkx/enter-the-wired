@@ -417,7 +417,7 @@ Comment=Redireciona o Steam Cloud dos jogos SLSsteam para o provedor da sua esco
 Exec="$CR_UI"
 Icon=cloudredirect
 Terminal=false
-Categories=Utility;Network;
+Categories=Game;
 Keywords=steam;cloud;slssteam;cloudredirect;
 EOF
     chmod 644 "$desktop_file"

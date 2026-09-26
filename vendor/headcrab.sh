@@ -816,8 +816,34 @@
       echo "CloudRedirect: Flatpak install skipped (native mode)"
         echo "" &> /dev/null
         }
-        
-        
+
+    linkcompatdata(){
+        local vdf="$SteamInstallDir/steamapps/libraryfolders.vdf"
+        local mainlib="$SteamInstallDir/steamapps/compatdata"
+        local mainreal lib prefix id created=0
+        if [ -f "$vdf" ] && [ -d "$mainlib" ]; then
+            mainreal=$(readlink -f "$SteamInstallDir")
+            while IFS= read -r lib; do
+                [ -n "$lib" ] || continue
+                [ "$(readlink -f "$lib" 2>/dev/null)" = "$mainreal" ] && continue
+                [ -d "$lib/steamapps/compatdata" ] || continue
+                for prefix in "$lib/steamapps/compatdata"/*; do
+                    [ -d "$prefix" ] || continue
+                    id=$(basename "$prefix")
+                    if [ ! -e "$mainlib/$id" ] && [ ! -L "$mainlib/$id" ]; then
+                        if ln -s "$prefix" "$mainlib/$id" 2>/dev/null; then
+                            created=1
+                        fi
+                    fi
+                done
+            done < <(grep -o '"path"[[:space:]]*"[^"]*"' "$vdf" | cut -d'"' -f4)
+        fi
+        if [ "$created" -eq 1 ]; then
+            echo "CompatData: secondary Steam libraries linked"
+        fi
+        echo "" &> /dev/null
+        }
+
     editconfig(){
         whereSLSsteamconfig
             if steamoscheck; then
@@ -922,6 +948,7 @@ EOF
 
         conditioncheck(){
             crinstall
+            linkcompatdata
             echo "Checking Conditions.."
             echo "=================================================="
             editconfig
